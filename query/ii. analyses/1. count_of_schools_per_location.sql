@@ -9,7 +9,8 @@ SELECT
     DENSE_RANK() OVER(ORDER BY COUNT(*) DESC) as ranking
 FROM masterlist
 GROUP BY region
-ORDER BY region ASC;
+ORDER BY ranking ASC
+LIMIT 5;
 
 
 -- schools per division

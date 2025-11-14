@@ -2,16 +2,38 @@
 
 ## <br>Overview
 
-This project uses the S.Y. 2020-2021 DepEd Schools Masterlist to demonstrate **SQL database creation**, **data cleaning**, and **analysis**.
+This project uses the S.Y. 2020-2021 DepEd Schools Masterlist that contains 64,000+ schools in the Philippines to demonstrate **SQL database creation**, **data cleaning**, and **analysis**.
 
-The dataset contains 64,000+ school information across the Philippines, including location, sectors, and classification details.
+## <br>Dataset
+**Source:** [data.gov.ph](https://data.gov.ph/index/public/dataset/SY%202020-2021%20Masterlist%20of%20Schools/5dpij7nd-uhrj-wk5l-xv2h-q5pgkiccv9ag)
+**<br>Size:** (60924, 13)
+**<br>Key Fields:** `region`, `division`, `municipality`, `sector`, `urban_rural_classification`, `school_subclassification`
 
-Dataset source: [data.gov.ph](https://data.gov.ph/index/public/dataset/SY%202020-2021%20Masterlist%20of%20Schools/5dpij7nd-uhrj-wk5l-xv2h-q5pgkiccv9ag)
+## <br>Project Workflow
+1. **Data Extraction and Preprocessing (Python)**
+   - Extracted raw data from PDF using Python (pdfplumber).
+   - Cleaned and standardized data using Pandas:
+      - Corrected inconsistencies in municipality, sector, and classification fields.
+      - Reformatted text cases and standardized identifiers.
+   - Load cleaned dataset to PostgreSQL (`masterlist` table)
+2. **Database Design** 
+   - Used a denormalized table structure to simplify querying and improve performance for analysis.
+   - Columns include:
+`region`, `division`, `district`, `school_name`, `municipality`, `barangay`,
+`sector`, `urban_rural_classification`, `school_subclassification`, and others.
 
-## <br>Database Structure
+1. **SQL Analysis**
+   - Used SQL to query and analyze data.
+   - Example analyses:
+     - Top regions and divisions by number of schools.
+     - Comparison between public vs. private schools.
+     - Ratio for public and private schools per sector.
+     - Classification of schools by sector and location.
+
+## <br>Database Design
 **Table name:** `masterlist` (denormalized)
 
-| Column Name                                   | Description                             |
+| Field                                  | Description                             |
 | --------------------------------------------- | --------------------------------------- |
 | `region`                                      | Region where the school is located      |
 | `division`                                    | Division under the region               |
@@ -27,29 +49,64 @@ Dataset source: [data.gov.ph](https://data.gov.ph/index/public/dataset/SY%202020
 | `school_subclassification`                    | DepEd Managed, Non-sectarian, Sectarian, etc. |
 | `modified_curricular_offering_classification` | All Offering (K-12), ES and JHS (K-10), JHS with SHS, etc.           |
 
-## <br>Project Workflow
-1. **Data Extraction and Preprocessing (Python)**
-   - Extracted the raw DepEd masterlist from CSV using pdfplumber (Python).
-   - Cleaned and standardized data using Pandas:
-      - Corrected inconsistencies in municipality, sector, and classification fields.
-      - Reformatted text cases and standardized identifiers.
-   - Exported the cleaned dataset for SQL analysis
-2. **Database Design** 
-   - Used a denormalized table structure to simplify querying and improve performance for analysis.
-   - Columns include:
-`region`, `division`, `district`, `school_name`, `municipality`, `barangay`,
-`sector`, `urban_rural_classification`, `school_subclassification`, and others.
 
-3. **SQL Analysis**
-   - Used PostgreSQL to query and analyze data.
-   - Example analyses:
-     - Top regions and divisions by number of schools.
-     - Comparison between public vs. private schools.
-     - Ratio for public and private schools per sector.
-     - Classification of schools by sector and location.
+## <br>Key SQL Analyses
 
+| Question                                  | Query Insight                             |
+| --------------------------------------------- | --------------------------------------- |
+| Regions by No. of Schools | - `Region IV-A` leads with 6300+ schools <br>- `CAR` had the fewest schools: only 2000+              |
+| Public vs. Private Ratio | - `78.24%` public and `21.76%` private schools are there in the Philippines <br>- `1:2.7` that for every public school, there are ~3 private schools in NCR <br>- `15.02:1` that for every private school, there are ~15 public schools in Region-VIII
+| Urban vs. Rural Schools | - `78.14%` in partially urbanized, `17.08%` in urban, and `4.78%` in rural areas <br>- In urban areas, `60.03%` of schools are private <br>- In partially urbanized and rural areas, `85.61%` and `94.47%` of schools are public, respectively
+| Top Curricular Offering Classification | `71.84%` or `43700+` out of all schools are `Purely ES`
+| Municipality with Zero Public School | Every `municipality` listed in the DepEd Masterlist has at least one public school
+| Most School Classification per Region | - `62.67%` of schools are `non-sectarian` in NCR <br>- `78.07%` of schools are `DepED managed` in Region-VI
+
+## <br>Sample Queries
+**a. Public vs. Private Ratio per Sector**
+```sql
+SELECT
+    urban_rural,
+    SUM(CASE WHEN sector IN ('Public', 'SUCs/LUCs') THEN 1 ELSE 0 END) AS public_count,
+    SUM(CASE WHEN sector = 'Private' THEN 1 ELSE 0 END) AS private_count,
+    ROUND(SUM(CASE WHEN sector IN ('Public', 'SUCs/LUCs') THEN 1 ELSE 0 END)::numeric/SUM(COUNT(*)) OVER(PARTITION BY urban_rural) * 100,2) AS public_percentage,
+    ROUND(SUM(CASE WHEN sector = 'Private' THEN 1 ELSE 0 END)::numeric/SUM(COUNT(*)) OVER(PARTITION BY urban_rural) * 100,2) AS private_percentage,
+    CONCAT(ROUND(
+            SUM(CASE WHEN sector IN ('Public', 'SUCs/LUCs') THEN 1 ELSE 0 END)::numeric/
+            SUM(CASE WHEN sector = 'Private' THEN 1 ELSE 0 END), 2
+        ), ' : 1') AS public_private_ratio
+FROM masterlist
+GROUP BY urban_rural;
+```
+
+**b. Most common school classification per region**
+```sql
+WITH rank_type AS (
+    SELECT
+        region,
+        school_subclassification,
+        COUNT(*) as total_count,
+        ROUND(COUNT(*)/SUM(COUNT(*)) OVER(PARTITION BY region) * 100,2) AS percentage,
+        RANK() OVER(PARTITION BY region ORDER BY COUNT(*) DESC)
+    FROM masterlist
+    GROUP BY region, school_subclassification
+    ORDER BY region ASC, total_count DESC
+)
+SELECT 
+    region,
+    school_subclassification,
+    percentage,
+    total_count
+FROM rank_type
+WHERE rank = 1
+ORDER BY region ASC;
+```
+**c. Total no. of schools in masterlist**
+```sql
+SELECT COUNT(*) AS total_count
+FROM masterlist;
+```
 ## <br>Tools and Technologies
-   - Python (pandas, pdfplumber)
+   - Python (pandas, pdfplumber, sqlalchemy)
    - PostgreSQL / SQL
    - Excel (for initial validation)
 
